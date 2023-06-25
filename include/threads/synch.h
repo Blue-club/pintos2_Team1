@@ -6,14 +6,8 @@
 
 /* A counting semaphore. */
 struct semaphore {
-	unsigned value;             /* Current value. 해당 자원의 개수를 나타내는 value*/
-	struct list waiters;        /* List of waiting threads. 이자원을 기다리는 스레드가 줄 서 있는 waiters 리스트가 들어있음*/
-};
-
-/*새로 생성한 구조체*/
-struct semaphore_elem{
-	struct list_elem elem;
-	struct semaphore semaphore;
+	unsigned value;             /* Current value. */
+	struct list waiters;        /* List of waiting threads. */
 };
 
 void sema_init (struct semaphore *, unsigned value);
@@ -43,7 +37,13 @@ void cond_init (struct condition *);
 void cond_wait (struct condition *, struct lock *);
 void cond_signal (struct condition *, struct lock *);
 void cond_broadcast (struct condition *, struct lock *);
+//add function
+bool sema_compare_priority(const struct list_elem *a, const struct list_elem *b, void *aux);
+bool donate_compare_priority(const struct list_elem *a, const struct list_elem *b, void *aux);
 
+void donate_priority();
+void remove_lock_donation_list(struct lock *lock);
+void refresh_priority (void);
 /* Optimization barrier.
  *
  * The compiler will not reorder operations across an

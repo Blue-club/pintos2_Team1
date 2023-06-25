@@ -6,6 +6,8 @@
  * object (anon, file, page_cache), by initializing the page object,and calls
  * initialization callback that passed from vm_alloc_page_with_initializer
  * function.
+ * 모든 페이지는 처음 생성할 때 uninit 페이지로 생성한다.
+ * vm_alloc_page_with_initializer (vm.c에 있음) 함수를 사용해서 struct page를 생성해야함
  * */
 
 #include "vm/vm.h"
@@ -45,10 +47,14 @@ uninit_new (struct page *page, void *va, vm_initializer *init,
 /* Initalize the page on first fault */
 static bool
 uninit_initialize (struct page *page, void *kva) {
-	struct uninit_page *uninit = &page->uninit;
+    //! page initializer, uninit page in union
+    // VM_ANON, VM_FILE 로 만들기 위해 추가적으로 필요한 루틴을 수행하기 위한 page_initializer
+	struct uninit_page *uninit = &page->uninit; 
 
 	/* Fetch first, page_initialize may overwrite the values */
-	vm_initializer *init = uninit->init;
+    //! vm initializer
+    // struct page와 연동된 page 자체에 담겨져 있어야 할 내용을 설정하기 위한 vm_initializer
+	vm_initializer *init = uninit->init;  
 	void *aux = uninit->aux;
 
 	/* TODO: You may need to fix this function. */
