@@ -5,21 +5,18 @@
 #include "threads/thread.h"
 #include "threads/loader.h"
 #include "userprog/gdt.h"
-#include "threads/flags.h"
-#include "intrinsic.h"
-#include "filesys/filesys.h"
 #include "userprog/process.h"
+#include "threads/flags.h"
+#include "filesys/filesys.h"
 #include "filesys/file.h"
-#include "lib/stdio.h"
+#include "intrinsic.h"
 #include "threads/synch.h"
 #include "devices/input.h"
 #include "lib/kernel/stdio.h"
 #include "threads/palloc.h"
 
-
-
-void syscall_entry (void);
-void syscall_handler (struct intr_frame *);
+void syscall_entry(void);
+void syscall_handler(struct intr_frame *);
 void check_address(void *addr);
 void halt(void);
 void exit(int status);
@@ -32,9 +29,11 @@ int write(int fd, const void *buffer, unsigned size);
 void seek(int fd, unsigned position);
 unsigned tell(int fd);
 void close(int fd);
-tid_t fork(const char *thread_name,struct intr_frame *f);
+tid_t fork(const char *thread_name, struct intr_frame *f);
 int exec(const char *cmd_line);
 int wait(int pid);
+void *mmap (void *addr, size_t length, int writable, int fd, off_t offset);
+void munmap (void *addr);
 
 /* System call.
  *
@@ -45,30 +44,30 @@ int wait(int pid);
  * The syscall instruction works by reading the values from the the Model
  * Specific Register (MSR). For the details, see the manual. */
 
-#define MSR_STAR 0xc0000081         /* Segment selector msr */
-#define MSR_LSTAR 0xc0000082        /* Long mode SYSCALL target */
+#define MSR_STAR 0xc0000081			/* Segment selector msr */
+#define MSR_LSTAR 0xc0000082		/* Long mode SYSCALL target */
 #define MSR_SYSCALL_MASK 0xc0000084 /* Mask for the eflags */
 
-void
-syscall_init (void) {
-	write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48  |
-			((uint64_t)SEL_KCSEG) << 32);
-	write_msr(MSR_LSTAR, (uint64_t) syscall_entry);
+void syscall_init(void)
+{
+	write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48 |
+							((uint64_t)SEL_KCSEG) << 32);
+	write_msr(MSR_LSTAR, (uint64_t)syscall_entry);
 
 	/* The interrupt service rountine should not serve any interrupts
 	 * until the syscall_entry swaps the userland stack to the kernel
 	 * mode stack. Therefore, we masked the FLAG_FL. */
 	write_msr(MSR_SYSCALL_MASK,
-			FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
-
+			  FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
 	lock_init(&filesys_lock);
 }
 
 /* The main system call interface */
-void
-syscall_handler (struct intr_frame *f UNUSED) {
-
+void syscall_handler(struct intr_frame *f UNUSED)
+{
 	int syscall_n = f->R.rax; /* 시스템 콜 넘버 */
+    thread_current()->rsp_ = f->rsp;
+    
 	switch (syscall_n)
 	{
 	case SYS_HALT:
@@ -112,74 +111,66 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		break;
 	case SYS_CLOSE:
 		close(f->R.rdi);
+        break;
+    case SYS_MMAP:
+        f->R.rax = mmap(f->R.rdi, f->R.rsi, f->R.rdx, f->R.r10, f->R.r8);
+        break;
+    case SYS_MUNMAP:
+        munmap(f->R.rdi);
 	}
-	
-	// TODO: Your implementation goes here.
-	// printf ("system call!\n");
-	// thread_exit ();
 }
-/*주소 값이 유저 영역에서 사용하는 주소 값인지 확인하는 함수, 유저 영역을 벗어난 영역일 경우 프로세스 종료*/
+
 void check_address(void *addr)
 {
 	if (addr == NULL)
 		exit(-1);
-
-	if (!is_user_vaddr(addr)) // 유저 영역이 아니거나 NULL이면 프로세스 종료
+	if (is_kernel_vaddr(addr))
 		exit(-1);
-
-	if (pml4_get_page(thread_current()->pml4, addr) == NULL)
-		exit(-1);
+	// if (pml4_get_page(thread_current()->pml4, addr) == NULL)
+	// 	exit(-1);
 }
 
-/*핀토스를 종료시키는 시스템 콜*/
-void halt(void){
-	power_off(); //핀토스를 종료 시키는 함수
+void halt(void)
+{
+	power_off();
 }
 
-/*현재 프롯세스를 종료시키는 시스템 콜*/
 void exit(int status)
 {
 	struct thread *curr = thread_current();
 	curr->exit_status = status; // 이거 wait에서 사용?
 	printf("%s: exit(%d)\n", curr->name, status);
-	thread_exit(); //스레드를 종료시키는 함수
+	thread_exit();
 }
 
-/*파일을 생성하는 시스템 콜*/
-bool create(const char *file, unsigned initial_size) 
+bool create(const char *file, unsigned initial_size)
 {
+    // lock_acquire(&filesys_lock);
 	check_address(file);
-	 // 파일 이름과 파일 사이즈를 인자 값으로 받아 파일을 생성하는 함수
-	return filesys_create(file, initial_size);
-
+	bool success = filesys_create(file, initial_size);
+	// lock_release(&filesys_lock);
+	return success;
 }
 
-/*파일을 삭제하는 시스템 콜*/
 bool remove(const char *file)
 {
 	check_address(file);
-	//파일 이름에 해당하는 파일을 제거하는 함수
 	return filesys_remove(file);
 }
 
-/**/
 int open(const char *file_name)
 {
 	check_address(file_name);
-	lock_acquire(&filesys_lock);
-	struct file *file = filesys_open(file_name);
-	if (file == NULL){
-		lock_release(&filesys_lock);
-		return -1;
-	}
-		
 
+	// lock_acquire(&filesys_lock);
+	struct file *file = filesys_open(file_name);
+	if (file == NULL)
+		// lock_release(&filesys_lock);
+		return -1;
 	int fd = process_add_file(file);
 	if (fd == -1)
 		file_close(file);
-	
-	lock_release(&filesys_lock);
-
+    // lock_release(&filesys_lock);
 	return fd;
 }
 
@@ -191,39 +182,63 @@ int filesize(int fd)
 	return file_length(file);
 }
 
+void seek(int fd, unsigned position)
+{
+	struct file *file = process_get_file(fd);
+	if (file == NULL)
+		return;
+	file_seek(file, position);
+}
+
+unsigned tell(int fd)
+{
+	struct file *file = process_get_file(fd);
+	if (file == NULL)
+		return;
+	return file_tell(file);
+}
+
+void close(int fd)
+{
+	struct file *file = process_get_file(fd);
+	if (file == NULL)
+		return;
+	file_close(file);
+	process_close_file(fd);
+}
 int read(int fd, void *buffer, unsigned size)
 {
 	check_address(buffer);
-	lock_acquire(&filesys_lock);
 
 	char *ptr = (char *)buffer;
 	int bytes_read = 0;
 
-	
-	if (fd == STDIN_FILENO)
-	{
+	lock_acquire(&filesys_lock);
+	if (fd == STDIN_FILENO) {
 		for (int i = 0; i < size; i++)
 		{
-			*ptr++ = input_getc(); // 키보드로 입력 받은 문자를 반환하는 함수
+			*ptr++ = input_getc();
 			bytes_read++;
 		}
 		lock_release(&filesys_lock);
 	}
-	else
-	{
+	else {
 		if (fd < 2)
 		{
-
 			lock_release(&filesys_lock);
 			return -1;
 		}
 		struct file *file = process_get_file(fd);
 		if (file == NULL)
 		{
-
 			lock_release(&filesys_lock);
 			return -1;
 		}
+        struct page *p = spt_find_page(&thread_current()->spt, buffer);
+        if (p && !(p->writable)) {
+            lock_release(&filesys_lock);
+            exit(-1);
+        }
 		bytes_read = file_read(file, buffer, size);
 		lock_release(&filesys_lock);
 	}
@@ -236,7 +251,7 @@ int write(int fd, const void *buffer, unsigned size)
 	int bytes_write = 0;
 	if (fd == STDOUT_FILENO)
 	{
-		putbuf(buffer, size); // 문자열을 화면에 출력해주는 함수
+		putbuf(buffer, size);
 		bytes_write = size;
 	}
 	else
@@ -253,45 +268,12 @@ int write(int fd, const void *buffer, unsigned size)
 	return bytes_write;
 }
 
-void seek(int fd, unsigned position)
-{
-	if (fd < 2)
-		return;
-	struct file *file = process_get_file(fd);
-	if (file == NULL)
-		return;
-	file_seek(file, position);
-}
-
-unsigned tell(int fd)
-{
-	if (fd < 2)
-		return;
-	struct file *file = process_get_file(fd);
-	if (file == NULL)
-		return;
-	return file_tell(file);
-}
-
-void close(int fd)
-{
-	if (fd < 2)
-		return;
-	struct file *file = process_get_file(fd);
-	if (file == NULL)
-		return;
-	file_close(file);
-	process_close_file(fd);
-}
-
-tid_t fork(const char *thread_name,struct intr_frame *f)
+tid_t fork(const char *thread_name, struct intr_frame *f)
 {
 	return process_fork(thread_name, f);
-
 }
 
-int exec(const char *cmd_line)
-{
+int exec(const char *cmd_line) {
 	check_address(cmd_line);
 
 	// process.c 파일의 process_create_initd 함수와 유사하다.
@@ -312,7 +294,30 @@ int exec(const char *cmd_line)
 		exit(-1); // 실패 시 status -1로 종료한다.
 }
 
-int wait(int pid)
-{
+int wait(int pid) {
 	return process_wait(pid);
+}
+
+void *mmap (void *addr, size_t length, int writable, int fd, off_t offset) {
+    // mmap에서 진행할 검증 하기
+    struct file *file = process_get_file(fd);
+    if (file == NULL)
+        return NULL;
+    if ((long)length <= 0 || file_length(file) == 0)
+        return NULL;
+    if (offset % PGSIZE != 0 )
+        return NULL;
+    if (fd == 0 || fd == 1)
+        return NULL;
+    if (addr == NULL || (uint64_t)addr % PGSIZE != 0)
+        return NULL;
+    if (is_kernel_vaddr(addr + (size_t)length) || is_kernel_vaddr(addr))
+        return NULL;
+    if (spt_find_page(&thread_current()->spt, addr))
+        return NULL;
+
+    return do_mmap(addr, length, writable, file, offset);
+}
+void munmap (void *addr) {
+    do_munmap(addr);
 }
